@@ -544,9 +544,8 @@ export class JsonSchemaGenerator {
                     }
                 } else {
                     // Report that type could not be processed
-                    const error = new TypeError("Unsupported type: " + propertyTypeString);
-                    (error as any).type = propertyType;
-                    throw error;
+                    // handle this type just as _any_ type
+                    console.warn("Unsupported type: " + propertyTypeString);
                     // definition = this.getTypeDefinition(propertyType, tc);
                 }
             }
@@ -1139,6 +1138,8 @@ export class JsonSchemaGenerator {
             root["$id"] = id;
         }
 
+        symbolNames = symbolNames.filter(symbolName => this.allSymbols[symbolName] != null)
+
         for (const symbolName of symbolNames) {
             root.definitions[symbolName] = this.getTypeDefinition(this.allSymbols[symbolName], this.args.topRef, undefined, undefined, undefined, this.userSymbols[symbolName]);
         }
@@ -1306,6 +1307,8 @@ export function generateSchema(program: ts.Program, fullTypeName: string, args: 
         } else {
             throw new Error(`${matchingSymbols.length} definitions found for requested type "${fullTypeName}".`);
         }
+    } else if(fullTypeName.indexOf(",") > -1) {
+        return generator.getSchemaForSymbols(fullTypeName.split(",").map(s => s.trim()));
     } else { // Use specific type as root object
         return generator.getSchemaForSymbol(fullTypeName);
     }
