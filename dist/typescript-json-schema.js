@@ -206,7 +206,7 @@ var JsonSchemaGenerator = (function () {
         this.tc = tc;
         this.userValidationKeywords = args.validationKeywords.reduce(function (acc, word) {
             var _a;
-            return (__assign({}, acc, (_a = {}, _a[word] = true, _a)));
+            return (__assign(__assign({}, acc), (_a = {}, _a[word] = true, _a)));
         }, {});
     }
     Object.defineProperty(JsonSchemaGenerator.prototype, "ReffedDefinitions", {
@@ -833,7 +833,7 @@ var JsonSchemaGenerator = (function () {
             root.definitions[symbolName] = this.getTypeDefinition(this.allSymbols[symbolName], this.args.topRef, undefined, undefined, undefined, this.userSymbols[symbolName]);
         }
         if (this.args.ref && includeReffedDefinitions && Object.keys(this.reffedDefinitions).length > 0) {
-            root.definitions = __assign({}, root.definitions, this.reffedDefinitions);
+            root.definitions = __assign(__assign({}, root.definitions), this.reffedDefinitions);
         }
         return root;
     };
