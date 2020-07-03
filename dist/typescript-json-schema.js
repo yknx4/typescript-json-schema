@@ -20,6 +20,7 @@ var vm = require("vm");
 var REGEX_FILE_NAME_OR_SPACE = /(\bimport\(".*?"\)|".*?")\.| /g;
 var REGEX_TSCONFIG_NAME = /^.*\.json$/;
 var REGEX_TJS_JSDOC = /^-([\w]+)\s+(\S|\S[\s\S]*\S)\s*$/g;
+var REGEX_GROUP_JSDOC = /^[.]?([\w]+)\s+(\S|\S[\s\S]*\S)\s*$/g;
 var NUMERIC_INDEX_PATTERN = "^[0-9]+$";
 function getDefaultArgs() {
     return {
@@ -167,6 +168,25 @@ function makeNullable(def) {
     }
     return def;
 }
+function getCanonicalDeclaration(sym) {
+    if (sym.valueDeclaration !== undefined) {
+        return sym.valueDeclaration;
+    }
+    else if (sym.declarations.length === 1) {
+        return sym.declarations[0];
+    }
+    throw new Error("Symbol \"" + sym.name + "\" has no valueDeclaration and " + sym.declarations.length + " declarations.");
+}
+function getSourceFile(sym) {
+    var currentDecl = getCanonicalDeclaration(sym);
+    while (currentDecl.kind !== ts.SyntaxKind.SourceFile) {
+        if (currentDecl.parent === undefined) {
+            throw new Error("Unable to locate source file for declaration \"" + sym.name + "\".");
+        }
+        currentDecl = currentDecl.parent;
+    }
+    return currentDecl;
+}
 var validationKeywords = {
     multipleOf: true,
     maximum: true,
@@ -176,9 +196,11 @@ var validationKeywords = {
     maxLength: true,
     minLength: true,
     pattern: true,
+    items: true,
     maxItems: true,
     minItems: true,
     uniqueItems: true,
+    contains: true,
     maxProperties: true,
     minProperties: true,
     additionalProperties: true,
@@ -192,11 +214,17 @@ var validationKeywords = {
     $ref: true,
     id: true
 };
+var subDefinitions = {
+    items: true,
+    additionalProperties: true,
+    contains: true,
+};
 var JsonSchemaGenerator = (function () {
     function JsonSchemaGenerator(symbols, allSymbols, userSymbols, inheritingTypes, tc, args) {
         if (args === void 0) { args = getDefaultArgs(); }
         this.args = args;
         this.reffedDefinitions = {};
+        this.schemaOverrides = new Map();
         this.typeNamesById = {};
         this.typeIdsByName = {};
         this.symbols = symbols;
@@ -227,8 +255,15 @@ var JsonSchemaGenerator = (function () {
         }
         var jsdocs = symbol.getJsDocTags();
         jsdocs.forEach(function (doc) {
-            var _a = [doc.name, doc.text], name = _a[0], text = _a[1];
-            if (doc.name === "TJS") {
+            var _a, _b;
+            var _c = [doc.name, doc.text], name = _c[0], text = _c[1];
+            if (name.startsWith("TJS-")) {
+                name = name.slice(4);
+                if (!text) {
+                    text = "true";
+                }
+            }
+            else if (name === "TJS" && text.startsWith("-")) {
                 var match = new RegExp(REGEX_TJS_JSDOC).exec(doc.text);
                 if (match) {
                     name = match[1];
@@ -237,6 +272,21 @@ var JsonSchemaGenerator = (function () {
                 else {
                     name = text.replace(/^[\s\-]+/, "");
                     text = "true";
+                }
+            }
+            if (subDefinitions[name]) {
+                var match = new RegExp(REGEX_GROUP_JSDOC).exec(text);
+                if (match) {
+                    var k = match[1];
+                    var v = match[2];
+                    definition[name] = __assign(__assign({}, definition[name]), (_a = {}, _a[k] = v ? parseValue(v) : true, _a));
+                    return;
+                }
+            }
+            if (name.includes(".")) {
+                var parts = name.split(".");
+                if (parts.length === 2 && subDefinitions[parts[0]]) {
+                    definition[parts[0]] = __assign(__assign({}, definition[parts[0]]), (_b = {}, _b[parts[1]] = text ? parseValue(text) : true, _b));
                 }
             }
             if (validationKeywords[name] || _this.userValidationKeywords[name]) {
@@ -317,7 +367,9 @@ var JsonSchemaGenerator = (function () {
                     }
                     else {
                         definition.type = "array";
-                        definition.items = this.getTypeDefinition(arrayType);
+                        if (!definition.items) {
+                            definition.items = this.getTypeDefinition(arrayType);
+                        }
                     }
                 }
                 else {
@@ -620,7 +672,9 @@ var JsonSchemaGenerator = (function () {
                     }
                     else {
                         definition.type = "array";
-                        definition.items = def;
+                        if (!definition.items) {
+                            definition.items = def;
+                        }
                     }
                 }
             }
@@ -714,12 +768,31 @@ var JsonSchemaGenerator = (function () {
         }
         var fullTypeName = "";
         if (asTypeAliasRef) {
-            fullTypeName = this.makeTypeNameUnique(typ, this.tc.getFullyQualifiedName(reffedType.getFlags() & ts.SymbolFlags.Alias ?
+            var typeName = this.tc.getFullyQualifiedName(reffedType.getFlags() & ts.SymbolFlags.Alias ?
                 this.tc.getAliasedSymbol(reffedType) :
-                reffedType).replace(REGEX_FILE_NAME_OR_SPACE, ""));
+                reffedType).replace(REGEX_FILE_NAME_OR_SPACE, "");
+            if (this.args.uniqueNames) {
+                var sourceFile = getSourceFile(reffedType);
+                var relativePath = path.relative(process.cwd(), sourceFile.fileName);
+                fullTypeName = typeName + "." + generateHashOfNode(getCanonicalDeclaration(reffedType), relativePath);
+            }
+            else {
+                fullTypeName = this.makeTypeNameUnique(typ, typeName);
+            }
         }
         else if (asRef) {
-            fullTypeName = this.getTypeName(typ);
+            if (this.args.uniqueNames) {
+                var sym = typ.symbol;
+                var sourceFile = getSourceFile(sym);
+                var relativePath = path.relative(process.cwd(), sourceFile.fileName);
+                fullTypeName = this.getTypeName(typ) + "." + generateHashOfNode(getCanonicalDeclaration(sym), relativePath);
+            }
+            else if (reffedType && this.schemaOverrides.has(reffedType.escapedName)) {
+                fullTypeName = reffedType.escapedName;
+            }
+            else {
+                fullTypeName = this.getTypeName(typ);
+            }
         }
         if (asRef) {
             returnedDefinition = {
@@ -799,6 +872,7 @@ var JsonSchemaGenerator = (function () {
     };
     JsonSchemaGenerator.prototype.setSchemaOverride = function (symbolName, schema) {
         this.reffedDefinitions[symbolName] = schema;
+        this.schemaOverrides.set(symbolName, schema);
     };
     JsonSchemaGenerator.prototype.getSchemaForSymbol = function (symbolName, includeReffedDefinitions) {
         if (includeReffedDefinitions === void 0) { includeReffedDefinitions = true; }
@@ -976,8 +1050,17 @@ function generateSchema(program, fullTypeName, args, onlyIncludeFiles) {
     if (fullTypeName === "*") {
         return generator.getSchemaForSymbols(generator.getMainFileSymbols(program, onlyIncludeFiles));
     }
-    else if (fullTypeName.indexOf(',') > -1) {
-        return generator.getSchemaForSymbols(fullTypeName.split(',').map(function (s) { return s.trim(); }));
+    else if (args.uniqueNames) {
+        var matchingSymbols = generator.getSymbols(fullTypeName);
+        if (matchingSymbols.length === 1) {
+            return generator.getSchemaForSymbol(matchingSymbols[0].name);
+        }
+        else {
+            throw new Error(matchingSymbols.length + " definitions found for requested type \"" + fullTypeName + "\".");
+        }
+    }
+    else if (fullTypeName.indexOf(",") > -1) {
+        return generator.getSchemaForSymbols(fullTypeName.split(",").map(function (s) { return s.trim(); }));
     }
     else {
         return generator.getSchemaForSymbol(fullTypeName);

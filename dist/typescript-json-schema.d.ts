@@ -74,6 +74,7 @@ export declare class JsonSchemaGenerator {
     private userSymbols;
     private inheritingTypes;
     private reffedDefinitions;
+    private schemaOverrides;
     private userValidationKeywords;
     private typeNamesById;
     private typeIdsByName;
@@ -84,7 +85,7 @@ export declare class JsonSchemaGenerator {
     }, inheritingTypes: {
         [baseName: string]: string[];
     }, tc: ts.TypeChecker, args?: Args);
-    readonly ReffedDefinitions: {
+    get ReffedDefinitions(): {
         [key: string]: Definition;
     };
     private parseCommentsIntoDefinition;

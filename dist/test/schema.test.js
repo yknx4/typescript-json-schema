@@ -4,6 +4,7 @@ var Ajv = require("ajv");
 var chai_1 = require("chai");
 var fs_1 = require("fs");
 var path_1 = require("path");
+var typescript_1 = require("typescript");
 var TJS = require("../typescript-json-schema");
 var ajv = new Ajv();
 var BASE = "test/programs/";
@@ -89,6 +90,30 @@ describe("interfaces", function () {
             chai_1.assert.deepEqual(schema.definitions["MySubObject"], schemaOverride);
         }
     });
+    it("should ignore type aliases that have schema overrides", function () {
+        var program = TJS.getProgramFromFiles([path_1.resolve(BASE + "type-alias-schema-override/main.ts")]);
+        var generator = TJS.buildGenerator(program);
+        chai_1.assert(generator !== null);
+        if (generator !== null) {
+            var schemaOverride = { type: "string" };
+            generator.setSchemaOverride("Some", schemaOverride);
+            var schema = generator.getSchemaForSymbol("MyObject");
+            chai_1.assert.deepEqual(schema, {
+                $schema: "http://json-schema.org/draft-07/schema#",
+                definitions: {
+                    Some: {
+                        type: "string"
+                    }
+                },
+                properties: {
+                    some: {
+                        $ref: "#/definitions/Some"
+                    }
+                },
+                type: "object"
+            });
+        }
+    });
 });
 describe("schema", function () {
     describe("type aliases", function () {
@@ -146,6 +171,7 @@ describe("schema", function () {
             validationKeywords: ["hide"]
         });
         assertSchema("annotation-id", "MyObject");
+        assertSchema("annotation-items", "MyObject");
         assertSchema("typeof-keyword", "MyObject", { typeOfKeyword: true });
         assertSchema("user-validation-keywords", "MyObject", {
             validationKeywords: ["chance", "important"]
@@ -160,7 +186,9 @@ describe("schema", function () {
         assertSchema("generic-recursive", "MyObject", {
             topRef: true
         });
-        assertSchema("generic-hell", "MyObject");
+        if (+typescript_1.versionMajorMinor < 3.7) {
+            assertSchema("generic-hell", "MyObject");
+        }
     });
     describe("comments", function () {
         assertSchema("comments", "MyObject");
@@ -217,6 +245,17 @@ describe("schema", function () {
         assertSchema("namespace-deep-1", "RootNamespace.Def");
         assertSchema("namespace-deep-2", "RootNamespace.SubNamespace.HelperA");
     });
+    describe("uniqueNames", function () {
+        assertSchemas("unique-names", "MyObject", {
+            uniqueNames: true
+        });
+        assertRejection("unique-names", "MyObject", {
+            uniqueNames: true
+        });
+        assertSchema("unique-names-multiple-subdefinitions", "MyObject", {
+            uniqueNames: true
+        });
+    });
     describe("other", function () {
         assertSchema("array-and-description", "MyObject");
         assertSchema("optionals", "MyObject");
@@ -228,9 +267,6 @@ describe("schema", function () {
         assertSchema("generate-all-types", "*");
         assertSchema("private-members", "MyObject", {
             excludePrivate: true
-        });
-        assertSchemas("unique-names", "MyObject", {
-            uniqueNames: true
         });
         assertSchema("builtin-names", "Ext.Foo");
         assertSchema("user-symbols", "*");
